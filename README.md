@@ -7,10 +7,13 @@ service. Runs entirely locally.
 ## What it demonstrates
 
 - 4 hardcoded users: **Alice, Bob, Charlie, David**
-- 2 group channels:
-  - **Everyone** — all 4 users
-  - **Small Group** — Alice, Bob, Charlie (David is not a member and never
-    sees these messages, proving Chime enforces membership server-side)
+- 2 channels, themed as a nonprofit charity 5K fundraiser:
+  - **Miles for Meals 5K** — the team channel, all 4 users
+  - **Alice & David** — a 1:1 DM (in Chime a DM is just a 2-member channel).
+    Bob and Charlie are not members and never see these messages, proving
+    Chime enforces membership server-side.
+- Seeding demo messages (`npm run seed`) by sending as each user via
+  `ChimeBearer`
 - Sending messages, loading message history, and receiving messages in real
   time over Chime's WebSocket
 
@@ -57,10 +60,13 @@ cp .env.example .env   # then edit .env
 # 3. Create the Chime resources (one time; writes chime-config.json)
 npm run setup
 
-# 4. Bundle the browser client (writes client/app.js)
+# 4. Seed the demo conversation (optional; re-running appends duplicates)
+npm run seed
+
+# 5. Bundle the browser client (writes client/app.js)
 npm run build
 
-# 5. Start the local server
+# 6. Start the local server
 npm start
 ```
 
@@ -69,8 +75,8 @@ each, and chat. Things to try:
 
 - Send messages back and forth between tabs — they appear in real time.
 - Reload a tab — history loads via `ListChannelMessages`.
-- Log in as **David** — he only sees the *Everyone* channel and receives
-  nothing from *Small Group*.
+- Log in as **Bob** or **Charlie** — they only see the *Miles for Meals 5K*
+  channel and receive nothing from the *Alice & David* DM.
 
 ## Cleanup
 
@@ -91,6 +97,7 @@ first if you want to recreate everything.)
 | Path | Purpose |
 |---|---|
 | `server/setup.js` | One-time script that creates the AppInstance, users, channels, memberships |
+| `server/seed.js` | Seeds the demo charity-5K conversation into the channels (run after setup) |
 | `server/server.js` | Express server: static hosting + `/api/config` credential vending |
 | `client/index.html` | Login screen (pick a user) + chat UI, no framework |
 | `client/src/app.js` | Browser logic: Chime WebSocket session, send, history (bundled by esbuild to `client/app.js`) |

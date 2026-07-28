@@ -5,8 +5,9 @@
  *   - 1 AppInstance
  *   - 4 AppInstanceUsers: alice, bob, charlie, david
  *   - 2 Channels:
- *       "Everyone"    -> alice, bob, charlie, david
- *       "Small Group" -> alice, bob, charlie
+ *       "Miles for Meals 5K" -> alice, bob, charlie, david (team channel)
+ *       "Alice & David"      -> alice, david (a 1:1 DM; a DM is just a
+ *                               2-member channel in Chime)
  *
  * Writes all resulting ARNs to chime-config.json (read by server.js).
  *
@@ -44,8 +45,8 @@ const USERS = [
 
 // Hardcoded groups for the POC. The first listed member creates the channel.
 const CHANNELS = [
-  { name: 'Everyone', members: ['alice', 'bob', 'charlie', 'david'] },
-  { name: 'Small Group', members: ['alice', 'bob', 'charlie'] },
+  { name: 'Miles for Meals 5K', members: ['alice', 'bob', 'charlie', 'david'] },
+  { name: 'Alice & David', members: ['alice', 'david'] },
 ];
 
 async function main() {
@@ -132,7 +133,8 @@ async function main() {
   const config = { region: REGION, appInstanceArn: AppInstanceArn, users, channels };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
   console.log(`\nDone. Wrote ${CONFIG_PATH}`);
-  console.log('Next: npm run build && npm start, then open http://localhost:3000');
+  console.log('Next: npm run seed (optional demo messages), then npm run build && npm start,');
+  console.log('then open http://localhost:3000');
 }
 
 main().catch((err) => {

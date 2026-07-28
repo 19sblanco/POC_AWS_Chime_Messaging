@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "setup": "node server/setup.js",
+    "seed": "node server/seed.js",
     "build": "esbuild client/src/app.js --bundle --outfile=client/app.js --platform=browser --main-fields=browser,module,main --define:global=window",
     "start": "node server/server.js"
   },
