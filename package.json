@@ -1,0 +1,21 @@
+{
+  "name": "poc-chime-messaging",
+  "version": "1.0.0",
+  "description": "Proof of concept: text-only group chat using the Amazon Chime SDK Messaging service. Local only.",
+  "private": true,
+  "scripts": {
+    "setup": "node server/setup.js",
+    "build": "esbuild client/src/app.js --bundle --outfile=client/app.js --platform=browser --main-fields=browser,module,main --define:global=window",
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-chime-sdk-identity": "^3.600.0",
+    "@aws-sdk/client-chime-sdk-messaging": "^3.600.0",
+    "amazon-chime-sdk-js": "^3.20.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.0"
+  }
+}
