@@ -4,10 +4,12 @@
  * Creates (in your AWS account):
  *   - 1 AppInstance
  *   - 4 AppInstanceUsers: alice, bob, charlie, david
+ *   - Alice as AppInstanceAdmin (needed to bootstrap the first channel moderator;
+ *     also enables hard DeleteChannelMessage via CLI/backend — not wired in UI)
  *   - 2 Channels:
- *       "Miles for Meals 5K" -> alice, bob, charlie, david (team channel)
+ *       "Miles for Meals 5K" -> alice (moderator), bob, charlie, david (team channel);
  *       "Alice & David"      -> alice, david (a 1:1 DM; a DM is just a
- *                               2-member channel in Chime)
+ *                               2-member channel in Chime; members only)
  *
  * Writes all resulting ARNs to chime-config.json (read by server.js).
  *
@@ -22,6 +24,7 @@ const path = require('path');
 const crypto = require('crypto');
 const {
   ChimeSDKIdentityClient,
+  CreateAppInstanceAdminCommand,
   CreateAppInstanceCommand,
   CreateAppInstanceUserCommand,
 } = require('@aws-sdk/client-chime-sdk-identity');
@@ -29,6 +32,7 @@ const {
   ChimeSDKMessagingClient,
   CreateChannelCommand,
   CreateChannelMembershipCommand,
+  CreateChannelModeratorCommand,
 } = require('@aws-sdk/client-chime-sdk-messaging');
 
 const REGION = process.env.AWS_REGION || 'us-east-1';
@@ -44,8 +48,13 @@ const USERS = [
 ];
 
 // Hardcoded groups for the POC. The first listed member creates the channel.
+// moderators are promoted via CreateChannelModerator after memberships.
 const CHANNELS = [
-  { name: 'Miles for Meals 5K', members: ['alice', 'bob', 'charlie', 'david'] },
+  {
+    name: 'Miles for Meals 5K',
+    members: ['alice', 'bob', 'charlie', 'david'],
+    moderators: ['alice'],
+  },
   { name: 'Alice & David', members: ['alice', 'david'] },
 ];
 
@@ -95,11 +104,23 @@ async function main() {
     console.log(`  -> ${AppInstanceUserArn}`);
   }
 
-  // 3. Channels + memberships ---------------------------------------------
+  // 3. AppInstanceAdmin (Alice) ------------------------------------------
+  // Required to create the first ChannelModerator on a new channel.
+  console.log('Promoting alice to AppInstanceAdmin...');
+  await identity.send(
+    new CreateAppInstanceAdminCommand({
+      AppInstanceArn,
+      AppInstanceAdminArn: users.alice.arn,
+    })
+  );
+  console.log(`  -> ${users.alice.arn}`);
+
+  // 4. Channels + memberships + moderators -------------------------------
   const channels = [];
   for (const channel of CHANNELS) {
     const [creatorId, ...otherMemberIds] = channel.members;
     const creatorArn = users[creatorId].arn;
+    const moderators = channel.moderators || [];
 
     console.log(`Creating channel "${channel.name}" (created by ${creatorId})...`);
     const { ChannelArn } = await messaging.send(
@@ -126,10 +147,26 @@ async function main() {
       );
     }
 
-    channels.push({ name: channel.name, arn: ChannelArn, members: channel.members });
+    for (const moderatorId of moderators) {
+      console.log(`  Promoting ${moderatorId} to ChannelModerator on "${channel.name}"...`);
+      await messaging.send(
+        new CreateChannelModeratorCommand({
+          ChannelArn,
+          ChannelModeratorArn: users[moderatorId].arn,
+          ChimeBearer: users.alice.arn, // AppInstanceAdmin bootstraps the first moderator
+        })
+      );
+    }
+
+    channels.push({
+      name: channel.name,
+      arn: ChannelArn,
+      members: channel.members,
+      moderators,
+    });
   }
 
-  // 4. Save config ---------------------------------------------------------
+  // 5. Save config ---------------------------------------------------------
   const config = { region: REGION, appInstanceArn: AppInstanceArn, users, channels };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
   console.log(`\nDone. Wrote ${CONFIG_PATH}`);

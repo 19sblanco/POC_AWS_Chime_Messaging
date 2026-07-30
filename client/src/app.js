@@ -9,12 +9,13 @@
  *      - history:          ListChannelMessages
  *      - send:             SendChannelMessage
  *      - edit:             UpdateChannelMessage (own messages only)
- *      - delete:           RedactChannelMessage (own messages only)
+ *      - delete:           RedactChannelMessage (own messages; channel
+ *                          moderators can also redact others')
  *
  * Chime also has DeleteChannelMessage for a true hard delete, but it requires an
- * AppInstanceAdmin, and this POC only creates plain AppInstanceUsers. Redaction
- * is the delete a regular member can perform: the message row survives, its
- * content is cleared, and it comes back from the API flagged as redacted.
+ * AppInstanceAdmin and is not wired in this UI. Redaction is the soft delete:
+ * the message row survives, its content is cleared, and it comes back from the
+ * API flagged as redacted.
  *
  * Bundled to client/app.js by esbuild (npm run build).
  */
@@ -48,28 +49,37 @@ const messagesByChannel = new Map();
 // ---------------------------------------------------------------------------
 const el = (id) => document.getElementById(id);
 
-function buildActions(msg) {
+function isModeratorForActiveChannel() {
+  const channel = (config.channels || []).find((c) => c.arn === activeChannelArn);
+  return !!(channel && channel.isModerator);
+}
+
+function buildActions(msg, { canEdit, canDelete }) {
   const actions = document.createElement('div');
   actions.className = 'actions';
 
-  const edit = document.createElement('button');
-  edit.type = 'button';
-  edit.textContent = 'Edit';
-  edit.addEventListener('click', () => startEdit(msg));
+  if (canEdit) {
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.textContent = 'Edit';
+    edit.addEventListener('click', () => startEdit(msg));
+    actions.appendChild(edit);
+  }
 
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.textContent = 'Delete';
-  remove.addEventListener('click', () => {
-    if (!window.confirm('Delete this message?')) return;
-    redactMessage(activeChannelArn, msg.id).catch((err) => {
-      console.error(err);
-      alert('Failed to delete: ' + err.message);
+  if (canDelete) {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Delete';
+    remove.addEventListener('click', () => {
+      if (!window.confirm('Delete this message?')) return;
+      redactMessage(activeChannelArn, msg.id).catch((err) => {
+        console.error(err);
+        alert('Failed to delete: ' + err.message);
+      });
     });
-  });
+    actions.appendChild(remove);
+  }
 
-  actions.appendChild(edit);
-  actions.appendChild(remove);
   return actions;
 }
 
@@ -129,6 +139,7 @@ function renderMessages() {
   const container = el('messages');
   container.innerHTML = '';
   const messages = messagesByChannel.get(activeChannelArn) || [];
+  const canModerate = isModeratorForActiveChannel();
   for (const msg of messages) {
     const isEditing = editing && editing.messageId === msg.id;
 
@@ -151,7 +162,12 @@ function renderMessages() {
       bubble.textContent = msg.redacted ? 'This message was deleted' : msg.content;
       wrapper.appendChild(bubble);
 
-      if (msg.mine && !msg.redacted) wrapper.appendChild(buildActions(msg));
+      // Edit: own messages only. Delete: own, or any message if channel moderator.
+      const canEdit = msg.mine && !msg.redacted;
+      const canDelete = !msg.redacted && (msg.mine || canModerate);
+      if (canEdit || canDelete) {
+        wrapper.appendChild(buildActions(msg, { canEdit, canDelete }));
+      }
     }
 
     container.appendChild(wrapper);
@@ -266,7 +282,8 @@ async function editMessage(channelArn, messageId, content) {
   );
 }
 
-// The member-level "delete": clears content but leaves the message in place.
+// Soft delete: clears content but leaves the message in place. Members can
+// redact their own; channel moderators can redact anyone's in that channel.
 async function redactMessage(channelArn, messageId) {
   await chime.send(
     new RedactChannelMessageCommand({

@@ -61,7 +61,11 @@ app.get('/api/config', (req, res) => {
     // Only the channels this user is a member of.
     channels: chimeConfig.channels
       .filter((c) => c.members.includes(userId))
-      .map((c) => ({ name: c.name, arn: c.arn })),
+      .map((c) => ({
+        name: c.name,
+        arn: c.arn,
+        isModerator: (c.moderators || []).includes(userId),
+      })),
     // POC only: raw account credentials handed to the browser (see note above).
     credentials: {
       accessKeyId: process.env.AWS_ACCESS_KEY_ID,
