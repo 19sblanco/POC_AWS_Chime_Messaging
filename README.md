@@ -16,6 +16,8 @@ service. Runs entirely locally.
   `ChimeBearer`
 - Sending messages, loading message history, and receiving messages in real
   time over Chime's WebSocket
+- Editing and deleting your own past messages (`UpdateChannelMessage` /
+  `RedactChannelMessage`), with both changes fanned out to other users live
 
 ## How it works
 
@@ -30,7 +32,8 @@ server.js (Express, :3000)
 
 browser (plain HTML/JS, no framework)
     ├── WebSocket to Chime (amazon-chime-sdk-js) ── receive messages realtime
-    └── SendChannelMessage / ListChannelMessages (AWS SDK v3) ── send + history
+    └── AWS SDK v3 ── SendChannelMessage / ListChannelMessages (send + history)
+                      UpdateChannelMessage / RedactChannelMessage (edit + delete)
 ```
 
 The browser talks to Chime **directly**; the local server only serves the page
@@ -75,6 +78,13 @@ each, and chat. Things to try:
 
 - Send messages back and forth between tabs — they appear in real time.
 - Reload a tab — history loads via `ListChannelMessages`.
+- Hover one of your own messages and hit **Edit** — the new text (plus an
+  `(edited)` marker) shows up in the other tabs immediately.
+- Hover one of your own messages and hit **Delete** — it turns into a
+  "This message was deleted" placeholder everywhere. Reload to confirm the
+  placeholder survives: the message still exists in Chime, only redacted.
+- Try to edit or delete someone else's message — the buttons are only rendered
+  on your own messages, and Chime would reject the call anyway.
 - Log in as **Bob** or **Charlie** — they only see the *Miles for Meals 5K*
   channel and receive nothing from the *Alice & David* DM.
 
@@ -111,3 +121,12 @@ first if you want to recreate everything.)
 - One WebSocket session per user covers **all** of that user's channels; the
   client routes incoming messages by `ChannelArn`.
 - Channel membership is enforced by the service, not by the client.
+- Editing a past message is `UpdateChannelMessage`. A plain member can only edit
+  their **own** messages; the `MessageId` stays the same and
+  `ListChannelMessages` returns the latest version.
+- There are **two** ways to remove a message, and the difference matters:
+  - `RedactChannelMessage` — what a member can do to their own message. The
+    message row stays, content and metadata are cleared, and it comes back
+    flagged `Redacted: true`. This is what the UI's "Delete" button calls.
+  - `DeleteChannelMessage` — a real hard delete; the message disappears from
+    history. **Only an `AppInstanceAdmin` can call it.** 

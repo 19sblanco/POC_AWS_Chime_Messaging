@@ -8,13 +8,22 @@
  *      - realtime receive: amazon-chime-sdk-js messaging session (WebSocket)
  *      - history:          ListChannelMessages
  *      - send:             SendChannelMessage
+ *      - edit:             UpdateChannelMessage (own messages only)
+ *      - delete:           RedactChannelMessage (own messages only)
+ *
+ * Chime also has DeleteChannelMessage for a true hard delete, but it requires an
+ * AppInstanceAdmin, and this POC only creates plain AppInstanceUsers. Redaction
+ * is the delete a regular member can perform: the message row survives, its
+ * content is cleared, and it comes back from the API flagged as redacted.
  *
  * Bundled to client/app.js by esbuild (npm run build).
  */
 import {
   ChimeSDKMessagingClient,
   ListChannelMessagesCommand,
+  RedactChannelMessageCommand,
   SendChannelMessageCommand,
+  UpdateChannelMessageCommand,
 } from '@aws-sdk/client-chime-sdk-messaging';
 import {
   ConsoleLogger,
@@ -30,32 +39,121 @@ let config = null; // /api/config response for the chosen user
 let chime = null; // ChimeSDKMessagingClient
 let session = null; // realtime messaging session
 let activeChannelArn = null;
-const messagesByChannel = new Map(); // channelArn -> [{ id, sender, content, timestamp, mine }]
+let editing = null; // { messageId, draft } while an edit is in progress
+// channelArn -> [{ id, sender, content, timestamp, mine, redacted, edited }]
+const messagesByChannel = new Map();
 
 // ---------------------------------------------------------------------------
 // DOM helpers
 // ---------------------------------------------------------------------------
 const el = (id) => document.getElementById(id);
 
+function buildActions(msg) {
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const edit = document.createElement('button');
+  edit.type = 'button';
+  edit.textContent = 'Edit';
+  edit.addEventListener('click', () => startEdit(msg));
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.textContent = 'Delete';
+  remove.addEventListener('click', () => {
+    if (!window.confirm('Delete this message?')) return;
+    redactMessage(activeChannelArn, msg.id).catch((err) => {
+      console.error(err);
+      alert('Failed to delete: ' + err.message);
+    });
+  });
+
+  actions.appendChild(edit);
+  actions.appendChild(remove);
+  return actions;
+}
+
+function buildEditor(msg) {
+  const form = document.createElement('form');
+  form.className = 'edit-form';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'edit-input';
+  input.autocomplete = 'off';
+  input.value = editing.draft;
+  // Kept in state so an incoming message re-render does not wipe the draft.
+  input.addEventListener('input', () => {
+    editing.draft = input.value;
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') cancelEdit();
+  });
+
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'edit-save';
+  save.textContent = 'Save';
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'edit-cancel';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', cancelEdit);
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const content = input.value.trim();
+    if (!content) return;
+    const channelArn = activeChannelArn;
+    editing = null;
+    renderMessages();
+    editMessage(channelArn, msg.id, content).catch((err) => {
+      console.error(err);
+      alert('Failed to edit: ' + err.message);
+    });
+  });
+
+  form.appendChild(input);
+  form.appendChild(save);
+  form.appendChild(cancel);
+
+  queueMicrotask(() => {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+  return form;
+}
+
 function renderMessages() {
   const container = el('messages');
   container.innerHTML = '';
   const messages = messagesByChannel.get(activeChannelArn) || [];
   for (const msg of messages) {
+    const isEditing = editing && editing.messageId === msg.id;
+
     const wrapper = document.createElement('div');
-    wrapper.className = 'msg' + (msg.mine ? ' mine' : '');
+    wrapper.className =
+      'msg' + (msg.mine ? ' mine' : '') + (isEditing ? ' editing' : '');
 
     const meta = document.createElement('div');
     meta.className = 'meta';
     const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
-    meta.textContent = `${msg.sender} ${time}`;
-
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    bubble.textContent = msg.content;
-
+    meta.textContent = `${msg.sender} ${time}` + (msg.edited && !msg.redacted ? ' (edited)' : '');
     wrapper.appendChild(meta);
-    wrapper.appendChild(bubble);
+
+    if (isEditing) {
+      wrapper.appendChild(buildEditor(msg));
+    } else {
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble' + (msg.redacted ? ' redacted' : '');
+      // A redacted message still exists in Chime, it just comes back with no content.
+      bubble.textContent = msg.redacted ? 'This message was deleted' : msg.content;
+      wrapper.appendChild(bubble);
+
+      if (msg.mine && !msg.redacted) wrapper.appendChild(buildActions(msg));
+    }
+
     container.appendChild(wrapper);
   }
   container.scrollTop = container.scrollHeight;
@@ -65,20 +163,68 @@ function setStatus(text) {
   el('status').textContent = text;
 }
 
-function addMessage(channelArn, message) {
+function startEdit(msg) {
+  editing = { messageId: msg.id, draft: msg.content || '' };
+  renderMessages();
+}
+
+function cancelEdit() {
+  editing = null;
+  renderMessages();
+}
+
+function messagesFor(channelArn) {
   if (!messagesByChannel.has(channelArn)) {
     messagesByChannel.set(channelArn, []);
   }
-  const list = messagesByChannel.get(channelArn);
-  // Dedupe (history load + websocket echo can overlap).
-  if (message.id && list.some((m) => m.id === message.id)) return;
-  list.push(message);
+  return messagesByChannel.get(channelArn);
+}
+
+// History load, websocket echo, and edits all arrive under the same MessageId,
+// so merge by id rather than appending or dropping.
+function upsertMessage(channelArn, message) {
+  const list = messagesFor(channelArn);
+  const index = list.findIndex((m) => m.id === message.id);
+  if (index === -1) {
+    list.push(message);
+  } else {
+    list[index] = { ...list[index], ...message };
+  }
+  if (channelArn === activeChannelArn) renderMessages();
+}
+
+function patchMessage(channelArn, messageId, patch) {
+  const message = messagesFor(channelArn).find((m) => m.id === messageId);
+  if (!message) return;
+  Object.assign(message, patch);
+  if (channelArn === activeChannelArn) renderMessages();
+}
+
+function removeMessage(channelArn, messageId) {
+  const list = messagesFor(channelArn);
+  const index = list.findIndex((m) => m.id === messageId);
+  if (index === -1) return;
+  list.splice(index, 1);
   if (channelArn === activeChannelArn) renderMessages();
 }
 
 // ---------------------------------------------------------------------------
-// Chime: history + send
+// Chime: history, send, edit, delete
 // ---------------------------------------------------------------------------
+
+// Maps a Chime ChannelMessage / ChannelMessageSummary to our local shape.
+function toMessage(raw) {
+  return {
+    id: raw.MessageId,
+    sender: (raw.Sender && raw.Sender.Name) || 'unknown',
+    content: raw.Content,
+    timestamp: raw.CreatedTimestamp,
+    mine: !!(raw.Sender && raw.Sender.Arn === config.userArn),
+    redacted: !!raw.Redacted,
+    edited: !!raw.LastEditedTimestamp,
+  };
+}
+
 async function loadHistory(channelArn) {
   const response = await chime.send(
     new ListChannelMessagesCommand({
@@ -89,13 +235,7 @@ async function loadHistory(channelArn) {
   );
   // Reverse to oldest-first for display.
   for (const m of (response.ChannelMessages || []).reverse()) {
-    addMessage(channelArn, {
-      id: m.MessageId,
-      sender: (m.Sender && m.Sender.Name) || 'unknown',
-      content: m.Content,
-      timestamp: m.CreatedTimestamp,
-      mine: m.Sender && m.Sender.Arn === config.userArn,
-    });
+    upsertMessage(channelArn, toMessage(m));
   }
 }
 
@@ -112,6 +252,29 @@ async function sendMessage(content) {
   );
   // No optimistic append: the websocket echoes our own message back to us,
   // which is also a nice proof that the realtime path works.
+}
+
+// Chime only allows a member to edit their own messages; anyone else gets a 403.
+async function editMessage(channelArn, messageId, content) {
+  await chime.send(
+    new UpdateChannelMessageCommand({
+      ChannelArn: channelArn,
+      MessageId: messageId,
+      ChimeBearer: config.userArn,
+      Content: content,
+    })
+  );
+}
+
+// The member-level "delete": clears content but leaves the message in place.
+async function redactMessage(channelArn, messageId) {
+  await chime.send(
+    new RedactChannelMessageCommand({
+      ChannelArn: channelArn,
+      MessageId: messageId,
+      ChimeBearer: config.userArn,
+    })
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -134,15 +297,34 @@ function connectSession() {
     messagingSessionDidStop: (event) => setStatus(`disconnected (${event.code})`),
     messagingSessionDidReceiveMessage: (message) => {
       // The session receives events for every channel this user belongs to.
-      if (message.type !== 'CREATE_CHANNEL_MESSAGE') return;
-      const payload = JSON.parse(message.payload);
-      addMessage(payload.ChannelArn, {
-        id: payload.MessageId,
-        sender: (payload.Sender && payload.Sender.Name) || 'unknown',
-        content: payload.Content,
-        timestamp: payload.CreatedTimestamp,
-        mine: payload.Sender && payload.Sender.Arn === config.userArn,
-      });
+      // Chime fans out edits and redactions to every channel member, so the UI
+      // never applies them optimistically; it waits for the event.
+      switch (message.type) {
+        case 'CREATE_CHANNEL_MESSAGE': {
+          const payload = JSON.parse(message.payload);
+          upsertMessage(payload.ChannelArn, toMessage(payload));
+          break;
+        }
+        case 'UPDATE_CHANNEL_MESSAGE': {
+          const payload = JSON.parse(message.payload);
+          upsertMessage(payload.ChannelArn, { ...toMessage(payload), edited: true });
+          break;
+        }
+        case 'REDACT_CHANNEL_MESSAGE': {
+          const payload = JSON.parse(message.payload);
+          patchMessage(payload.ChannelArn, payload.MessageId, { redacted: true });
+          break;
+        }
+        case 'DELETE_CHANNEL_MESSAGE': {
+          // Only an AppInstanceAdmin can trigger this, so it will not fire from
+          // this UI; handled so an admin hard delete elsewhere still lands here.
+          const payload = JSON.parse(message.payload);
+          removeMessage(payload.ChannelArn, payload.MessageId);
+          break;
+        }
+        default:
+          break;
+      }
     },
   });
 
@@ -153,6 +335,7 @@ function connectSession() {
 // UI wiring
 // ---------------------------------------------------------------------------
 function selectChannel(channel) {
+  editing = null;
   activeChannelArn = channel.arn;
   el('channel-name').textContent = channel.name;
   document.querySelectorAll('.channel-btn').forEach((btn) => {
