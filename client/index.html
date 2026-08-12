@@ -110,7 +110,39 @@
       font-style: italic;
     }
 
-    /* Edit / Delete, revealed on hover over your own messages. */
+    /* Quoted parent of a reply. Chime has no threads: the quote is rebuilt from
+       the pointer this client stored in the message's metadata. */
+    .msg .quote {
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+      width: fit-content;
+      max-width: 100%;
+      margin-bottom: 3px;
+      padding: 4px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      text-align: left;
+      background: #f3f4f6;
+      border: none;
+      border-left: 3px solid #93c5fd;
+      border-radius: 4px;
+      color: #4b5563;
+      cursor: pointer;
+    }
+    .msg .quote:hover { background: #e5e7eb; }
+    .msg.mine .quote { margin-left: auto; }
+    .msg .quote-sender { flex: none; font-weight: 600; color: #2563eb; }
+    .msg .quote-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Pulse when a quote jumps to its parent. */
+    @keyframes flash-highlight {
+      0%, 100% { box-shadow: none; }
+      20%, 60% { box-shadow: 0 0 0 3px #fbbf24; }
+    }
+    .msg.flash .bubble { animation: flash-highlight 1.4s ease-out; }
+
+    /* Reply / Edit / Delete, revealed on hover over your own messages. */
     .msg .actions { display: flex; gap: 6px; margin-top: 3px; visibility: hidden; }
     .msg.mine .actions { justify-content: flex-end; }
     .msg:hover .actions { visibility: visible; }
@@ -141,6 +173,38 @@
     }
     .edit-save { border: none; background: #2563eb; color: #fff; }
     .edit-cancel { border: 1px solid #d1d5db; background: #fff; color: #4b5563; }
+
+    #reply-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 20px;
+      background: #eff6ff;
+      border-top: 1px solid #e5e7eb;
+      font-size: 13px;
+      color: #4b5563;
+    }
+    #reply-banner[hidden] { display: none; }
+    .reply-banner-text {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #reply-banner-preview { color: #6b7280; }
+    #reply-cancel {
+      flex: none;
+      width: 22px;
+      height: 22px;
+      font-size: 16px;
+      line-height: 1;
+      border: none;
+      border-radius: 50%;
+      background: #dbeafe;
+      color: #1e40af;
+      cursor: pointer;
+    }
+    #reply-cancel:hover { background: #bfdbfe; }
 
     #composer {
       display: flex;
@@ -189,6 +253,13 @@
         <span id="status"></span>
       </div>
       <div id="messages"></div>
+      <div id="reply-banner" hidden>
+        <div class="reply-banner-text">
+          Replying to <strong id="reply-banner-sender"></strong>
+          <span id="reply-banner-preview"></span>
+        </div>
+        <button id="reply-cancel" type="button" title="Cancel reply (Esc)">&times;</button>
+      </div>
       <form id="composer">
         <input id="message-input" type="text" placeholder="Type a message..." autocomplete="off" />
         <button id="send-btn" type="submit">Send</button>

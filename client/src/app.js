@@ -17,6 +17,12 @@
  * the message row survives, its content is cleared, and it comes back from the
  * API flagged as redacted.
  *
+ * Replies are not a Chime feature. Chime has no threading, so a reply is an
+ * ordinary message carrying a pointer to its parent in the 1KB `Metadata` field
+ * that every STANDARD message has. Chime returns metadata from
+ * ListChannelMessages and includes it in the WebSocket payload, so replies fan
+ * out in realtime like any other message; only this client interprets them.
+ *
  * Bundled to client/app.js by esbuild (npm run build).
  */
 import {
@@ -33,6 +39,10 @@ import {
   MessagingSessionConfiguration,
 } from 'amazon-chime-sdk-js';
 
+// Quoted parent text is copied into the reply's metadata, so it has to stay
+// well inside Chime's 1KB metadata cap alongside the parent's id and sender.
+const REPLY_PREVIEW_LIMIT = 120;
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -41,7 +51,9 @@ let chime = null; // ChimeSDKMessagingClient
 let session = null; // realtime messaging session
 let activeChannelArn = null;
 let editing = null; // { messageId, draft } while an edit is in progress
-// channelArn -> [{ id, sender, content, timestamp, mine, redacted, edited }]
+let replyingTo = null; // { messageId, sender, preview } while composing a reply
+// channelArn ->
+//   [{ id, sender, content, timestamp, mine, redacted, edited, metadata, replyTo }]
 const messagesByChannel = new Map();
 
 // ---------------------------------------------------------------------------
@@ -54,9 +66,17 @@ function isModeratorForActiveChannel() {
   return !!(channel && channel.isModerator);
 }
 
-function buildActions(msg, { canEdit, canDelete }) {
+function buildActions(msg, { canReply, canEdit, canDelete }) {
   const actions = document.createElement('div');
   actions.className = 'actions';
+
+  if (canReply) {
+    const reply = document.createElement('button');
+    reply.type = 'button';
+    reply.textContent = 'Reply';
+    reply.addEventListener('click', () => startReply(msg));
+    actions.appendChild(reply);
+  }
 
   if (canEdit) {
     const edit = document.createElement('button');
@@ -118,7 +138,7 @@ function buildEditor(msg) {
     const channelArn = activeChannelArn;
     editing = null;
     renderMessages();
-    editMessage(channelArn, msg.id, content).catch((err) => {
+    editMessage(channelArn, msg.id, content, msg.metadata).catch((err) => {
       console.error(err);
       alert('Failed to edit: ' + err.message);
     });
@@ -135,6 +155,40 @@ function buildEditor(msg) {
   return form;
 }
 
+// The quoted text travels inside the reply's own metadata, so it renders even
+// when the parent is older than the history we loaded. Jumping to the parent is
+// therefore best effort: it only works while the parent is on screen.
+function buildQuote(replyTo) {
+  const quote = document.createElement('button');
+  quote.type = 'button';
+  quote.className = 'quote';
+
+  const sender = document.createElement('span');
+  sender.className = 'quote-sender';
+  sender.textContent = replyTo.sender || 'unknown';
+  quote.appendChild(sender);
+
+  const preview = document.createElement('span');
+  preview.className = 'quote-preview';
+  preview.textContent = replyTo.preview || '';
+  quote.appendChild(preview);
+
+  quote.addEventListener('click', () => jumpToMessage(replyTo.messageId));
+  return quote;
+}
+
+function jumpToMessage(messageId) {
+  const target = document
+    .getElementById('messages')
+    .querySelector(`[data-id="${CSS.escape(messageId)}"]`);
+  if (!target) return;
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target.classList.remove('flash');
+  // Restart the animation even if this message was just highlighted.
+  void target.offsetWidth;
+  target.classList.add('flash');
+}
+
 function renderMessages() {
   const container = el('messages');
   container.innerHTML = '';
@@ -146,6 +200,7 @@ function renderMessages() {
     const wrapper = document.createElement('div');
     wrapper.className =
       'msg' + (msg.mine ? ' mine' : '') + (isEditing ? ' editing' : '');
+    wrapper.dataset.id = msg.id;
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -156,23 +211,39 @@ function renderMessages() {
     if (isEditing) {
       wrapper.appendChild(buildEditor(msg));
     } else {
+      // Redaction clears metadata server-side, so a redacted reply loses its
+      // quote on reload; drop it here too so both states look the same.
+      if (msg.replyTo && !msg.redacted) {
+        wrapper.appendChild(buildQuote(msg.replyTo));
+      }
+
       const bubble = document.createElement('div');
       bubble.className = 'bubble' + (msg.redacted ? ' redacted' : '');
       // A redacted message still exists in Chime, it just comes back with no content.
       bubble.textContent = msg.redacted ? 'This message was deleted' : msg.content;
       wrapper.appendChild(bubble);
 
-      // Edit: own messages only. Delete: own, or any message if channel moderator.
+      // Reply: anyone's message. Edit: own messages only.
+      // Delete: own, or any message if channel moderator.
+      const canReply = !msg.redacted;
       const canEdit = msg.mine && !msg.redacted;
       const canDelete = !msg.redacted && (msg.mine || canModerate);
-      if (canEdit || canDelete) {
-        wrapper.appendChild(buildActions(msg, { canEdit, canDelete }));
+      if (canReply || canEdit || canDelete) {
+        wrapper.appendChild(buildActions(msg, { canReply, canEdit, canDelete }));
       }
     }
 
     container.appendChild(wrapper);
   }
   container.scrollTop = container.scrollHeight;
+}
+
+function renderReplyBanner() {
+  const banner = el('reply-banner');
+  banner.hidden = !replyingTo;
+  if (!replyingTo) return;
+  el('reply-banner-sender').textContent = replyingTo.sender;
+  el('reply-banner-preview').textContent = replyingTo.preview;
 }
 
 function setStatus(text) {
@@ -187,6 +258,21 @@ function startEdit(msg) {
 function cancelEdit() {
   editing = null;
   renderMessages();
+}
+
+function startReply(msg) {
+  replyingTo = {
+    messageId: msg.id,
+    sender: msg.sender,
+    preview: (msg.content || '').slice(0, REPLY_PREVIEW_LIMIT),
+  };
+  renderReplyBanner();
+  el('message-input').focus();
+}
+
+function cancelReply() {
+  replyingTo = null;
+  renderReplyBanner();
 }
 
 function messagesFor(channelArn) {
@@ -228,7 +314,34 @@ function removeMessage(channelArn, messageId) {
 // Chime: history, send, edit, delete
 // ---------------------------------------------------------------------------
 
+// Metadata is a free-form string as far as Chime is concerned, so treat anything
+// we did not write as "no reply" rather than letting a parse error break render.
+function parseReplyTo(metadata) {
+  if (!metadata) return null;
+  try {
+    const parsed = JSON.parse(metadata);
+    const replyTo = parsed && parsed.replyTo;
+    return replyTo && replyTo.messageId ? replyTo : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildReplyMetadata(replyTo) {
+  if (!replyTo) return undefined;
+  return JSON.stringify({
+    replyTo: {
+      messageId: replyTo.messageId,
+      sender: replyTo.sender,
+      preview: replyTo.preview,
+    },
+  });
+}
+
 // Maps a Chime ChannelMessage / ChannelMessageSummary to our local shape.
+// `metadata` is kept verbatim so an edit can round-trip it: UpdateChannelMessage
+// overwrites metadata with whatever it is given, so dropping it would strip the
+// reply pointer off any reply that gets edited.
 function toMessage(raw) {
   return {
     id: raw.MessageId,
@@ -238,6 +351,8 @@ function toMessage(raw) {
     mine: !!(raw.Sender && raw.Sender.Arn === config.userArn),
     redacted: !!raw.Redacted,
     edited: !!raw.LastEditedTimestamp,
+    metadata: raw.Metadata,
+    replyTo: parseReplyTo(raw.Metadata),
   };
 }
 
@@ -255,7 +370,7 @@ async function loadHistory(channelArn) {
   }
 }
 
-async function sendMessage(content) {
+async function sendMessage(content, replyTo) {
   await chime.send(
     new SendChannelMessageCommand({
       ChannelArn: activeChannelArn,
@@ -263,6 +378,7 @@ async function sendMessage(content) {
       Content: content,
       Type: 'STANDARD',
       Persistence: 'PERSISTENT',
+      Metadata: buildReplyMetadata(replyTo),
       ClientRequestToken: crypto.randomUUID(),
     })
   );
@@ -271,13 +387,15 @@ async function sendMessage(content) {
 }
 
 // Chime only allows a member to edit their own messages; anyone else gets a 403.
-async function editMessage(channelArn, messageId, content) {
+// Metadata is resent unchanged so editing a reply keeps it attached to its parent.
+async function editMessage(channelArn, messageId, content, metadata) {
   await chime.send(
     new UpdateChannelMessageCommand({
       ChannelArn: channelArn,
       MessageId: messageId,
       ChimeBearer: config.userArn,
       Content: content,
+      Metadata: metadata,
     })
   );
 }
@@ -353,11 +471,15 @@ function connectSession() {
 // ---------------------------------------------------------------------------
 function selectChannel(channel) {
   editing = null;
+  // A reply target belongs to the channel it was picked in, so drop it here
+  // rather than letting it follow the user into another channel.
+  replyingTo = null;
   activeChannelArn = channel.arn;
   el('channel-name').textContent = channel.name;
   document.querySelectorAll('.channel-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.arn === channel.arn);
   });
+  renderReplyBanner();
   renderMessages();
   el('message-input').focus();
 }
@@ -418,11 +540,18 @@ async function init() {
     const content = input.value.trim();
     if (!content || !activeChannelArn) return;
     input.value = '';
-    sendMessage(content).catch((err) => {
+    const replyTo = replyingTo;
+    cancelReply();
+    sendMessage(content, replyTo).catch((err) => {
       console.error(err);
       alert('Failed to send: ' + err.message);
     });
   });
+
+  el('message-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') cancelReply();
+  });
+  el('reply-cancel').addEventListener('click', cancelReply);
 }
 
 init();
