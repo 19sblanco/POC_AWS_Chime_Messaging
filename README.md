@@ -20,8 +20,9 @@ service. Runs entirely locally.
 - Editing and redaction, with both changes fanned out to other
   users live — members redact their own; Alice (moderator) can also redact
   others on Miles for Meals 5K
-- Replying to a specific earlier message. This is not built into Chime,
-  so this is layered on top of the message `Metadata` field
+- Slack-style threads: replies live in a side panel instead of the channel
+  timeline, and the message they hang off shows a "3 replies" link. Threading is
+  not built into Chime, so this is layered on top of the message `Metadata` field
 
 ## How it works
 
@@ -39,7 +40,7 @@ browser (plain HTML/JS, no framework)
     ├── WebSocket to Chime (amazon-chime-sdk-js) ── receive messages realtime
     └── AWS SDK v3 ── SendChannelMessage / ListChannelMessages (send + history)
                       UpdateChannelMessage / RedactChannelMessage (edit + delete)
-                      message Metadata carries the reply pointer (see Findings)
+                      message Metadata carries the thread pointer (see Findings)
 ```
 
 The browser talks to Chime **directly**; the local server only serves the page
@@ -84,10 +85,12 @@ each, and chat. Things to try:
 
 - Send messages back and forth between tabs — they appear in real time.
 - Reload a tab — history loads via `ListChannelMessages`.
-- Hover any message and hit **Reply** — the composer shows a "Replying to..."
-  bar, and the sent message appears under a quote of its parent in every tab.
-  Click a quote to jump to the original and flash it.
-- Reply to something, then **Edit** the reply — the quote stays attached.
+- Hover any message and hit **Reply** — a thread panel opens on the right. The
+  reply does not join the channel timeline; instead a "1 reply" link appears
+  under the original message in every tab. Click it to open the thread.
+- Reply to a reply — threads are flat, so it lands in the same thread rather
+  than nesting a level deeper.
+- Reply to something, then **Edit** the reply — it stays in its thread.
 - Hover one of your own messages and hit **Edit** — the new text (plus an
   `(edited)` marker) shows up in the other tabs immediately.
 - Hover one of your own messages and hit **Delete** — it turns into a
@@ -126,10 +129,26 @@ first if you want to recreate everything.)
     in that channel. This is what the UI's "Delete" button calls.
   - `DeleteChannelMessage` — a real hard delete; the message disappears from
     history. **Only an `AppInstanceAdmin` can call it.** Not wired in this UI.
-- **Replies are not a built in Chime feature**. I implimented replies by storing 
-the parent message's id in the meta data of the reply message. This way the client
-can simply view the message data and render replies how it wants. Its worth noting 
-that the meta data of a message can contain 1KB of data.
+- **Threads are not a built in Chime feature**. A channel is a flat list of
+  messages. I implimented threading by storing the thread root's message id in
+  the metadata of every reply, plus a snapshot of the root's sender and first
+  120 characters. This way the client can read the message data and group the
+  conversation however it wants — here, replies are pulled out of the channel
+  timeline and into a side panel, Slack style. Threads are deliberately flat
+  (a reply to a reply resolves up to the same root), because the pointer names
+  a root rather than a parent. Its worth noting that the meta data of a message
+  can contain 1KB of data, which is what caps the size of that root snapshot.
+- **Redaction erases the thread pointer.** `RedactChannelMessage` clears
+  metadata along with content, so a deleted reply comes back from history with
+  no idea which thread it belonged to and shows up in the channel timeline as a
+  stray "This message was deleted" row. The live UI does not show this because
+  the redact event only flags the message and the client keeps the pointer it
+  already had; reload and it moves. Keeping deleted replies in their thread
+  would require storing the thread pointer somewhere other than Chime.
+- **Reply counts are only as accurate as the loaded history.** The "3 replies"
+  count is computed client-side from the messages currently loaded (newest 50).
+  Chime cannot filter or count messages by metadata, so there is no way to ask
+  it how many replies a message has; an accurate count needs a database.
 - **Likes/hearts need a database** - This is because likes are not built into chime
 and given that we expect upto several thousand users in a group and any number
 of them could reply and/or heart a post, in order to manage that scale the only

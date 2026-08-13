@@ -70,6 +70,7 @@
       flex: 1;
       display: flex;
       flex-direction: column;
+      min-width: 0;
     }
     #channel-header {
       padding: 14px 20px;
@@ -78,6 +79,15 @@
       font-weight: bold;
     }
     #status { font-weight: normal; font-size: 12px; color: #888; margin-left: 8px; }
+
+    /* Channel timeline on the left, thread panel on the right. */
+    #workspace { flex: 1; display: flex; min-height: 0; }
+    #message-column {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
     #messages {
       flex: 1;
       overflow-y: auto;
@@ -110,37 +120,38 @@
       font-style: italic;
     }
 
-    /* Quoted parent of a reply. Chime has no threads: the quote is rebuilt from
-       the pointer this client stored in the message's metadata. */
-    .msg .quote {
+    /* Stand-in for a thread root that is older than the loaded history. */
+    .msg.stub .bubble {
+      background: #fff;
+      border: 1px dashed #d1d5db;
+      color: #6b7280;
+      font-style: italic;
+    }
+
+    /* "3 replies" under a root message: Chime has no threads, so the count is
+       derived from the reply pointers in the loaded messages' metadata. */
+    .thread-link {
       display: flex;
       gap: 6px;
       align-items: baseline;
       width: fit-content;
-      max-width: 100%;
-      margin-bottom: 3px;
-      padding: 4px 10px;
+      /* Overlaps the bubble's rounded corner so the badge reads as part of the
+         message rather than a row of its own. */
+      margin: -2px 0 0 12px;
+      padding: 2px 8px 2px 10px;
       font-family: inherit;
-      font-size: 12px;
-      text-align: left;
-      background: #f3f4f6;
-      border: none;
-      border-left: 3px solid #93c5fd;
-      border-radius: 4px;
-      color: #4b5563;
+      font-size: 11px;
+      background: #eff6ff;
+      border: 1px solid #dbeafe;
+      border-top-color: transparent;
+      border-radius: 0 0 10px 10px;
       cursor: pointer;
     }
-    .msg .quote:hover { background: #e5e7eb; }
-    .msg.mine .quote { margin-left: auto; }
-    .msg .quote-sender { flex: none; font-weight: 600; color: #2563eb; }
-    .msg .quote-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-    /* Pulse when a quote jumps to its parent. */
-    @keyframes flash-highlight {
-      0%, 100% { box-shadow: none; }
-      20%, 60% { box-shadow: 0 0 0 3px #fbbf24; }
-    }
-    .msg.flash .bubble { animation: flash-highlight 1.4s ease-out; }
+    .thread-link:hover { background: #dbeafe; }
+    .thread-link.active { border-color: #2563eb; border-top-color: transparent; }
+    .msg.mine .thread-link { margin-left: auto; margin-right: 12px; }
+    .thread-count { font-weight: 600; color: #2563eb; }
+    .thread-last { color: #6b7280; }
 
     /* Reply / Edit / Delete, revealed on hover over your own messages. */
     .msg .actions { display: flex; gap: 6px; margin-top: 3px; visibility: hidden; }
@@ -174,37 +185,84 @@
     .edit-save { border: none; background: #2563eb; color: #fff; }
     .edit-cancel { border: 1px solid #d1d5db; background: #fff; color: #4b5563; }
 
-    #reply-banner {
+    /* ---- Thread panel ---- */
+    #thread-panel {
+      width: 360px;
+      flex: none;
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+      border-left: 1px solid #e5e7eb;
+    }
+    #thread-panel[hidden] { display: none; }
+    #thread-header {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 8px 20px;
-      background: #eff6ff;
-      border-top: 1px solid #e5e7eb;
-      font-size: 13px;
-      color: #4b5563;
+      padding: 14px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      font-weight: bold;
     }
-    #reply-banner[hidden] { display: none; }
-    .reply-banner-text {
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    #reply-banner-preview { color: #6b7280; }
-    #reply-cancel {
+    #thread-header .thread-title { flex: 1; }
+    #thread-channel { display: block; font-size: 11px; font-weight: normal; color: #888; }
+    #thread-close {
       flex: none;
-      width: 22px;
-      height: 22px;
-      font-size: 16px;
+      width: 24px;
+      height: 24px;
+      font-size: 18px;
       line-height: 1;
       border: none;
       border-radius: 50%;
-      background: #dbeafe;
-      color: #1e40af;
+      background: #f3f4f6;
+      color: #4b5563;
       cursor: pointer;
     }
-    #reply-cancel:hover { background: #bfdbfe; }
+    #thread-close:hover { background: #e5e7eb; }
+    #thread-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    /* The panel is narrow, so bubbles get more of it than in the timeline. */
+    #thread-messages .msg { max-width: 90%; }
+    .thread-divider {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: #888;
+    }
+    .thread-divider::after {
+      content: "";
+      flex: 1;
+      border-top: 1px solid #e5e7eb;
+    }
+    #thread-composer {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid #e5e7eb;
+    }
+    #thread-input {
+      flex: 1;
+      min-width: 0;
+      padding: 10px 12px;
+      font-size: 14px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+    }
+    #thread-composer button {
+      padding: 10px 14px;
+      font-size: 14px;
+      border: none;
+      border-radius: 8px;
+      background: #2563eb;
+      color: #fff;
+      cursor: pointer;
+    }
 
     #composer {
       display: flex;
@@ -252,18 +310,29 @@
         <span id="channel-name"></span>
         <span id="status"></span>
       </div>
-      <div id="messages"></div>
-      <div id="reply-banner" hidden>
-        <div class="reply-banner-text">
-          Replying to <strong id="reply-banner-sender"></strong>
-          <span id="reply-banner-preview"></span>
+      <div id="workspace">
+        <div id="message-column">
+          <div id="messages"></div>
+          <form id="composer">
+            <input id="message-input" type="text" placeholder="Type a message..." autocomplete="off" />
+            <button id="send-btn" type="submit">Send</button>
+          </form>
         </div>
-        <button id="reply-cancel" type="button" title="Cancel reply (Esc)">&times;</button>
+        <aside id="thread-panel" hidden>
+          <div id="thread-header">
+            <span class="thread-title">
+              Thread
+              <small id="thread-channel"></small>
+            </span>
+            <button id="thread-close" type="button" title="Close thread (Esc)">&times;</button>
+          </div>
+          <div id="thread-messages"></div>
+          <form id="thread-composer">
+            <input id="thread-input" type="text" placeholder="Reply in thread..." autocomplete="off" />
+            <button type="submit">Reply</button>
+          </form>
+        </aside>
       </div>
-      <form id="composer">
-        <input id="message-input" type="text" placeholder="Type a message..." autocomplete="off" />
-        <button id="send-btn" type="submit">Send</button>
-      </form>
     </div>
   </div>
 

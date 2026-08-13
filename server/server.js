@@ -21,7 +21,8 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const MAX_PORT_ATTEMPTS = 10;
 const CONFIG_PATH = path.join(__dirname, '..', 'chime-config.json');
 
 if (!fs.existsSync(CONFIG_PATH)) {
@@ -74,6 +75,23 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Chime messaging POC running at http://localhost:${PORT}`);
-});
+// Running two copies of the POC side by side (say, to compare branches) is
+// useful, so take the next free port instead of failing when one is taken. The
+// client only ever uses relative URLs, so it does not care which port it is on.
+function listen(port, attemptsLeft) {
+  const server = app.listen(port, () => {
+    console.log(`Chime messaging POC running at http://localhost:${port}`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code !== 'EADDRINUSE') throw err;
+    if (attemptsLeft === 0) {
+      console.error(`Ports ${PORT}-${port} are all in use. Set PORT to pick another.`);
+      process.exit(1);
+    }
+    console.log(`Port ${port} is in use, trying ${port + 1}...`);
+    listen(port + 1, attemptsLeft - 1);
+  });
+}
+
+listen(PORT, MAX_PORT_ATTEMPTS);
