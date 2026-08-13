@@ -20,8 +20,8 @@ service. Runs entirely locally.
 - Editing and redaction, with both changes fanned out to other
   users live — members redact their own; Alice (moderator) can also redact
   others on Miles for Meals 5K
-- Replying to a specific earlier message, quoted Slack-style. Chime has no
-  threading, so this is layered on top of the message `Metadata` field
+- Replying to a specific earlier message. This is not built into Chime,
+  so this is layered on top of the message `Metadata` field
 
 ## How it works
 
@@ -128,37 +128,12 @@ first if you want to recreate everything.)
     history. **Only an `AppInstanceAdmin` can call it.** Not wired in this UI.
 - **Replies are not a built in Chime feature**. I implimented replies by storing 
 the parent message's id in the meta data of the reply message. This way the client
-can simply view the message data and render replies how it wants. This approach
-also allows for reply threads if wanted. Its worth noting that the meta data of 
-a message can contain 1KB of data.
-
-- **Replies and reactions are not Chime features.** There is no threading API and
-  no reactions API; `SendChannelMessage` has no parent-message field. What Chime
-  gives you is `Metadata`, an arbitrary string of up to 1KB on every `STANDARD`
-  message, returned by `ListChannelMessages` and included in the WebSocket
-  payload — so custom data fans out in realtime for free and only the client has
-  to interpret it. (`MessageAttributes` looks similar but is only used for push
-  notification filter rules, and `Target` restricts a message's *visibility* to
-  one member rather than marking it as a reply.)
-  - **Replies** (implemented) store `{ replyTo: { messageId, sender, preview } }`
-    in the reply's own metadata. The quoted text is copied in rather than looked
-    up, because `ListChannelMessages` only loads the newest 50 messages and the
-    parent is often not among them. The tradeoff is that the quote is a snapshot:
-    if the parent is later edited, the quote keeps the older text.
-  - **Likes** (researched, not implemented) cannot store a who-liked-what map on
-    the target message: `UpdateChannelMessage` is restricted to the message's
-    original sender, and that restriction also applies to channel moderators and
-    AppInstanceAdmins, so no privileged backend user can write to someone else's
-    message. A like therefore has to be its own message whose metadata points at
-    the target, which the client filters out of the timeline and folds into a
-    count. Two consequences: un-liking should `UpdateChannelMessage` your own
-    reaction message to mark it removed rather than redact it (redaction clears
-    metadata, leaving a tombstone the client can no longer recognise), and
-    reaction messages share history with real ones, so the `MaxResults: 50`
-    history load has to paginate to still get 50 real messages.
-- Because `UpdateChannelMessage` replaces metadata with whatever it is given,
-  every edit has to resend the existing metadata or it silently strips whatever
-  the app stored there.
+can simply view the message data and render replies how it wants. Its worth noting 
+that the meta data of a message can contain 1KB of data.
+- **Likes/hearts need a database** - This is because likes are not built into chime
+and given that we expect upto several thousand users in a group and any number
+of them could reply and/or heart a post, in order to manage that scale the only
+appropriate workaround is to use a database.
 - Roles (Chime auth-by-role):
   - **Member** — view history, send, edit/redact own messages in channels they
     belong to.
